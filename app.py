@@ -155,19 +155,25 @@ with chart_col2:
     else:
         st.info("Data tidak tersedia untuk menampilkan grafik.")
 
-# Bar Chart Group Penerima
-st.subheader("🏢 Qty PGI berdasarkan Group Penerima")
-if not df_filtered.empty and 'Group-Penerima' in df_filtered.columns:
-    penerima_qty = df_filtered.groupby(['Group-Penerima', 'Categori'])['Qty PGI'].sum().reset_index()
-    fig_penerima = px.bar(
-        penerima_qty,
-        x='Group-Penerima',
+# Bar Chart Regional per Qty PGI
+st.subheader("🗺️ Qty PGI berdasarkan Regional")
+if not df_filtered.empty and 'Regional' in df_filtered.columns:
+    regional_qty = df_filtered.groupby(['Regional', 'Categori'])['Qty PGI'].sum().reset_index()
+    fig_regional = px.bar(
+        regional_qty,
+        x='Regional',
         y='Qty PGI',
-        color='Categori',
+        color='Categori' if 'Categori' in df_filtered.columns else None,
         barmode='group',
-        text='Qty PGI'
+        text='Qty PGI',
+        labels={'Qty PGI': 'Total Qty PGI', 'Regional': 'Regional'},
+        color_discrete_sequence=px.colors.qualitative.Set1
     )
-    st.plotly_chart(fig_penerima, use_container_width=True)
+    fig_regional.update_traces(texttemplate='%{text:.2s}', textposition='outside')
+    fig_regional.update_layout(xaxis={'categoryorder': 'total descending'})
+    st.plotly_chart(fig_regional, use_container_width=True)
+else:
+    st.info("Data tidak tersedia untuk menampilkan grafik Regional.")
 
 st.divider()
 
