@@ -2,198 +2,186 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# -----------------------------------------------------------------------------
-# 1. KONFIGURASI HALAMAN
-# -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Dashboard Rekapan Transaksi Gudang",
-    page_icon="📦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Dashboard Rekapan Transaksi Gudang", page_layout="wide")
 
-# -----------------------------------------------------------------------------
-# 2. LOAD DATA DARI GOOGLE SHEETS
-# -----------------------------------------------------------------------------
-@st.cache_data(ttl=600)  # Cache data selama 10 menit
-def load_data(sheet_url):
-    # Mengubah URL Google Sheets biasa menjadi format CSV export
-    if "/edit" in sheet_url:
-        export_url = sheet_url.split("/edit")[0] + "/export?format=csv"
-    else:
-        export_url = sheet_url
+st.markdown("""
+<style>
+    .main .block-container { padding-top: 1.5rem; }
+    div[data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📦 Dashboard Rekapan Transaksi Gudang")
+st.caption("Monitoring Outbound STO, Quantities, & Distribution")
+
+# URL Google Sheets CSV export
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1p34-rItGV12l15ArIroyJdsYWDPL0rOyrj-ekqw3baY/export?format=csv"
+
+@st.cache_data(ttl=60)
+def load_data():
+    try:
+        df = pd.read_csv(SHEET_URL)
+        # Clean column names (strip whitespace)
+        df.columns = df.columns.str.strip()
         
-    df = pd.read_csv(export_url)
-    
-    # Cleaning nama kolom (menghapus spasi berlebih)
-    df.columns = df.columns.str.strip()
-    
-    # Memastikan kolom angka bertipe numerik
-    numeric_cols = ['Document', 'Material', 'Qty PGI']
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        # Fuzzy matching untuk mencari kolom Supplying Plant / Pengirim
+        supplying_col = None
+        for col in df.columns:
+            cleaned_col_lower = col.lower().replace(" ", "").replace("/", "").replace("_", "")
+            if "supplying" in cleaned_col_lower or "pengirim" in cleaned_col_lower:
+                supplying_col = col
+                break
+        
+        if supplying_col and supplying_col != "Supplying Plant/Pengirim":
+            df.rename(columns={supplying_col: "Supplying Plant/Pengirim"}, inplace=True)
             
-    return df
+        # Ensure numerical columns
+        for num_col in ['Document', 'Material', 'Qty PGI']:
+            if num_col in df.columns:
+                df[num_col] = pd.to_numeric(df[num_col], errors='coerce').fillna(0)
+                
+        return df
+    except Exception as e:
+        st.error(f"Gagal memuat data dari Google Sheets: {e}")
+        return pd.DataFrame()
 
-# URL Google Sheets Publik Anda
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1p34-rItGV12l15ArIroyJdsYWDPL0rOyrj-ekqw3baY/edit?usp=sharing"
+df = load_data()
 
-try:
-    df_raw = load_data(SHEET_URL)
-except Exception as e:
-    st.error(f"Gagal memuat data dari Google Sheets. Pastikan akses spreadsheet sudah di-set ke 'Anyone with link can view'. Detail: {e}")
+if df.empty:
+    st.warning("Data kosong atau gagal diakses. Pastikan pengaturan Google Sheets diset ke 'Anyone with the link' (Viewer).")
     st.stop()
 
-# -----------------------------------------------------------------------------
-# 3. SIDEBAR / FILTER
-# -----------------------------------------------------------------------------
+# --- SIDEBAR FILTERS ---
 st.sidebar.header("🔍 Filter Data Transaksi")
 
-# Filter Periode
-periode_options = ["Semua"] + list(df_raw['Periode'].dropna().unique()) if 'Periode' in df_raw.columns else ["Semua"]
+# 1. Filter Periode
+periode_options = ["Semua"] + sorted([str(x) for x in df['Periode'].dropna().unique()]) if 'Periode' in df.columns else ["Semua"]
 selected_periode = st.sidebar.selectbox("Periode:", periode_options)
 
-# Filter Regional
-regional_options = ["Semua"] + list(df_raw['Regional'].dropna().unique()) if 'Regional' in df_raw.columns else ["Semua"]
+df_filtered = df.copy()
+if selected_periode != "Semua":
+    df_filtered = df_filtered[df_filtered['Periode'].astype(str) == selected_periode]
+
+# 2. Filter Regional
+regional_options = ["Semua"] + sorted([str(x) for x in df_filtered['Regional'].dropna().unique()]) if 'Regional' in df_filtered.columns else ["Semua"]
 selected_regional = st.sidebar.selectbox("Regional:", regional_options)
 
-# Filter Supplying Plant
-plant_options = ["Semua"] + list(df_raw['Supplying Plant/Pengirim'].dropna().unique()) if 'Supplying Plant/Pengirim' in df_raw.columns else ["Semua"]
-selected_plant = st.sidebar.selectbox("Supplying Plant / Pengirim:", plant_options)
-
-# Filter Group Penerima
-penerima_options = ["Semua"] + list(df_raw['Group-Penerima'].dropna().unique()) if 'Group-Penerima' in df_raw.columns else ["Semua"]
-selected_penerima = st.sidebar.selectbox("Group Penerima:", penerima_options)
-
-# Filter Category
-category_options = ["Semua"] + list(df_raw['Categori'].dropna().unique()) if 'Categori' in df_raw.columns else ["Semua"]
-selected_category = st.sidebar.selectbox("Kategori:", category_options)
-
-# Filter Brand (Multiselect)
-brand_options = list(df_raw['Brand'].dropna().unique()) if 'Brand' in df_raw.columns else []
-selected_brand = st.sidebar.multiselect("Brand:", brand_options, default=[])
-
-# Apply Filter ke DataFrame
-df_filtered = df_raw.copy()
-
-if selected_periode != "Semua":
-    df_filtered = df_filtered[df_filtered['Periode'] == selected_periode]
 if selected_regional != "Semua":
-    df_filtered = df_filtered[df_filtered['Regional'] == selected_regional]
-if selected_plant != "Semua":
-    df_filtered = df_filtered[df_filtered['Supplying Plant/Pengirim'] == selected_plant]
-if selected_penerima != "Semua":
-    df_filtered = df_filtered[df_filtered['Group-Penerima'] == selected_penerima]
+    df_filtered = df_filtered[df_filtered['Regional'].astype(str) == selected_regional]
+
+# 3. Filter Supplying Plant / Pengirim
+supplying_col_name = "Supplying Plant/Pengirim" if "Supplying Plant/Pengirim" in df_filtered.columns else None
+
+if supplying_col_name:
+    plant_list = sorted([str(x) for x in df_filtered[supplying_col_name].dropna().unique() if str(x).strip() != ""])
+    plant_options = ["Semua"] + plant_list
+    selected_plant = st.sidebar.selectbox("Supplying Plant / Pengirim:", plant_options)
+    
+    if selected_plant != "Semua":
+        df_filtered = df_filtered[df_filtered[supplying_col_name].astype(str) == selected_plant]
+else:
+    st.sidebar.warning("Kolom Supplying Plant/Pengirim tidak ditemukan di data.")
+
+# 4. Filter Category
+category_options = ["Semua"] + sorted([str(x) for x in df_filtered['Categori'].dropna().unique()]) if 'Categori' in df_filtered.columns else ["Semua"]
+selected_category = st.sidebar.selectbox("Category:", category_options)
+
 if selected_category != "Semua":
-    df_filtered = df_filtered[df_filtered['Categori'] == selected_category]
-if selected_brand:
-    df_filtered = df_filtered[df_filtered['Brand'].isin(selected_brand)]
+    df_filtered = df_filtered[df_filtered['Categori'].astype(str) == selected_category]
 
-# -----------------------------------------------------------------------------
-# 4. MAIN CONTENT & KPI CARDS
-# -----------------------------------------------------------------------------
-st.title("📦 Dashboard Rekapan Transaksi Gudang")
-st.markdown("Analisis real-time pergerakan barang, dokumen, dan kuantitas PGI.")
-
-# Agregasi KPI
+# --- KPI METRICS ---
+col1, col2, col3, col4 = st.columns(4)
 total_qty = int(df_filtered['Qty PGI'].sum()) if 'Qty PGI' in df_filtered.columns else 0
 total_mat = int(df_filtered['Material'].sum()) if 'Material' in df_filtered.columns else 0
 total_doc = int(df_filtered['Document'].sum()) if 'Document' in df_filtered.columns else 0
-total_row = len(df_filtered)
+total_rows = len(df_filtered)
 
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric(label="Total Qty PGI", value=f"{total_qty:,}")
-with col2:
-    st.metric(label="Total Material", value=f"{total_mat:,}")
-with col3:
-    st.metric(label="Total Dokumen", value=f"{total_doc:,}")
-with col4:
-    st.metric(label="Jumlah Baris Data", value=f"{total_row:,}")
+col1.metric("Total Qty PGI", f"{total_qty:,}")
+col2.metric("Total Material", f"{total_mat:,}")
+col3.metric("Total Document", f"{total_doc:,}")
+col4.metric("Baris Transaksi", f"{total_rows:,}")
 
-st.divider()
+st.markdown("---")
 
-# -----------------------------------------------------------------------------
-# 5. CHART VISUALISASI
-# -----------------------------------------------------------------------------
-chart_col1, chart_col2 = st.columns(2)
+# --- DETAIL TABEL & GRAFIK SUPPLYING PLANT / PENGIRIM ---
+st.subheader("🏢 Detail & Distribusi Supplying Plant / Pengirim")
 
-with chart_col1:
-    st.subheader("📊 Top 10 Brand berdasarkan Qty PGI")
-    if not df_filtered.empty and 'Brand' in df_filtered.columns:
-        brand_qty = df_filtered.groupby('Brand')['Qty PGI'].sum().reset_index()
-        brand_qty = brand_qty.sort_values(by='Qty PGI', ascending=False).head(10)
-        
-        fig_brand = px.bar(
-            brand_qty, 
-            x='Qty PGI', 
-            y='Brand', 
-            orientation='h',
-            text='Qty PGI',
-            color='Qty PGI',
-            color_continuous_scale='Blues'
+if supplying_col_name and supplying_col_name in df_filtered.columns:
+    # 1. Tabel Agregasi Detail Per Supplying Plant
+    plant_summary = df_filtered.groupby(supplying_col_name).agg(
+        Total_Qty_PGI=('Qty PGI', 'sum'),
+        Total_Material=('Material', 'sum'),
+        Total_Document=('Document', 'sum'),
+        Jumlah_Transaksi=('Qty PGI', 'count')
+    ).reset_index().sort_values(by='Total_Qty_PGI', ascending=False)
+
+    col_chart, col_table = st.columns([1, 1])
+
+    with col_chart:
+        st.markdown("##### 📊 Top Supplying Plant Berdasarkan Qty PGI")
+        fig_plant = px.bar(
+            plant_summary.head(15),
+            x=supplying_col_name,
+            y='Total_Qty_PGI',
+            color=supplying_col_name,
+            text_auto='.2s',
+            labels={'Total_Qty_PGI': 'Total Qty PGI', supplying_col_name: 'Supplying Plant / Pengirim'},
+            title="Breakdown Qty PGI per Plant Pengirim"
         )
-        fig_brand.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
-        st.plotly_chart(fig_brand, use_container_width=True)
-    else:
-        st.info("Data tidak tersedia untuk menampilkan grafik.")
+        fig_plant.update_layout(showlegend=False, xaxis_tickangle=-45)
+        st.plotly_chart(fig_plant, use_container_width=True)
 
-with chart_col2:
-    st.subheader("🍕 Distribusi Kategori")
-    if not df_filtered.empty and 'Categori' in df_filtered.columns:
-        cat_qty = df_filtered.groupby('Categori')['Qty PGI'].sum().reset_index()
-        
-        fig_cat = px.pie(
-            cat_qty, 
-            names='Categori', 
-            values='Qty PGI', 
-            hole=0.4,
-            color_discrete_sequence=px.colors.qualitative.Set2
+    with col_table:
+        st.markdown("##### 📋 Ringkasan Angka Detail Per Plant")
+        st.dataframe(
+            plant_summary.rename(columns={
+                supplying_col_name: 'Supplying Plant / Pengirim',
+                'Total_Qty_PGI': 'Qty PGI',
+                'Total_Material': 'Material',
+                'Total_Document': 'Document',
+                'Jumlah_Transaksi': 'Baris Data'
+            }),
+            use_container_width=True,
+            hide_index=True
         )
-        st.plotly_chart(fig_cat, use_container_width=True)
-    else:
-        st.info("Data tidak tersedia untuk menampilkan grafik.")
-
-# Bar Chart Regional per Qty PGI
-st.subheader("🗺️ Qty PGI berdasarkan Regional")
-if not df_filtered.empty and 'Regional' in df_filtered.columns:
-    regional_qty = df_filtered.groupby(['Regional', 'Categori'])['Qty PGI'].sum().reset_index()
-    fig_regional = px.bar(
-        regional_qty,
-        x='Regional',
-        y='Qty PGI',
-        color='Categori' if 'Categori' in df_filtered.columns else None,
-        barmode='group',
-        text='Qty PGI',
-        labels={'Qty PGI': 'Total Qty PGI', 'Regional': 'Regional'},
-        color_discrete_sequence=px.colors.qualitative.Set1
-    )
-    fig_regional.update_traces(texttemplate='%{text:.2s}', textposition='outside')
-    fig_regional.update_layout(xaxis={'categoryorder': 'total descending'})
-    st.plotly_chart(fig_regional, use_container_width=True)
 else:
-    st.info("Data tidak tersedia untuk menampilkan grafik Regional.")
+    st.info("Kolom Supplying Plant / Pengirim tidak tersedia untuk menampilkan breakdown detail.")
 
-st.divider()
+st.markdown("---")
 
-# -----------------------------------------------------------------------------
-# 6. TABEL DATA INTERAKTIF
-# -----------------------------------------------------------------------------
-st.subheader("📋 Detail Tabel Data Transaksi")
+# --- GRAFIK REGIONAL & BRAND ---
+col_left, col_right = st.columns(2)
 
-# Pilihan Download CSV
-csv_data = df_filtered.to_csv(index=False).encode('utf-8')
-st.download_button(
-    label="📥 Export Data Terfilter ke CSV",
-    data=csv_data,
-    file_name="Rekapan_Transaksi_Filtered.csv",
-    mime="text/csv",
-)
+with col_left:
+    st.subheader("🏢 Qty PGI berdasarkan Regional")
+    if 'Regional' in df_filtered.columns and 'Categori' in df_filtered.columns:
+        fig_reg = px.bar(
+            df_filtered,
+            x='Regional',
+            y='Qty PGI',
+            color='Categori',
+            barmode='group',
+            text_auto='.2s',
+            title="Qty PGI per Regional & Kategori"
+        )
+        st.plotly_chart(fig_reg, use_container_width=True)
 
-# Tampilan Tabel Interaktif
-st.dataframe(
-    df_filtered,
-    use_container_width=True,
-    hide_index=True
-)
+with col_right:
+    st.subheader("🏷️ Top 10 Brand berdasarkan Qty PGI")
+    if 'Brand' in df_filtered.columns and 'Qty PGI' in df_filtered.columns:
+        brand_df = df_filtered.groupby('Brand')['Qty PGI'].sum().reset_index().sort_values(by='Qty PGI', ascending=False).head(10)
+        fig_brand = px.bar(
+            brand_df,
+            x='Qty PGI',
+            y='Brand',
+            orientation='h',
+            text_auto='.2s',
+            color='Qty PGI',
+            color_continuous_scale='Viridis'
+        )
+        fig_brand.update_layout(yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig_brand, use_container_width=True)
+
+# --- TABEL DATA TRANSPOSE / RAW DATA ---
+st.subheader("📋 Log Detail Transaksi Gudang")
+st.dataframe(df_filtered, use_container_width=True)
